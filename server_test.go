@@ -87,8 +87,8 @@ func (s *ServerInterceptorTestSuite) SetupTest() {
 	DefaultServerMetrics.serverStartedCounter.Reset()
 	DefaultServerMetrics.serverHandledCounter.Reset()
 	DefaultServerMetrics.serverHandledHistogram.Reset()
-	DefaultServerMetrics.serverStreamMsgReceived.Reset()
-	DefaultServerMetrics.serverStreamMsgSent.Reset()
+	DefaultServerMetrics.serverStreamMsgReceivedCounter.Reset()
+	DefaultServerMetrics.serverStreamMsgSentCounter.Reset()
 	Register(s.server)
 }
 
@@ -175,9 +175,9 @@ func (s *ServerInterceptorTestSuite) TestStreamingIncrementsMetrics() {
 	requireValueWithRetry(s.ctx, s.T(), 1,
 		DefaultServerMetrics.serverHandledCounter.WithLabelValues("server_stream", "mwitkow.testproto.TestService", "PingList", "OK"))
 	requireValueWithRetry(s.ctx, s.T(), countListResponses,
-		DefaultServerMetrics.serverStreamMsgSent.WithLabelValues("server_stream", "mwitkow.testproto.TestService", "PingList"))
+		DefaultServerMetrics.serverStreamMsgSentCounter.WithLabelValues("server_stream", "mwitkow.testproto.TestService", "PingList"))
 	requireValueWithRetry(s.ctx, s.T(), 1,
-		DefaultServerMetrics.serverStreamMsgReceived.WithLabelValues("server_stream", "mwitkow.testproto.TestService", "PingList"))
+		DefaultServerMetrics.serverStreamMsgReceivedCounter.WithLabelValues("server_stream", "mwitkow.testproto.TestService", "PingList"))
 	requireValueWithRetryHistCount(s.ctx, s.T(), 1,
 		DefaultServerMetrics.serverHandledHistogram.WithLabelValues("server_stream", "mwitkow.testproto.TestService", "PingList"))
 

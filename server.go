@@ -26,8 +26,8 @@ var (
 func init() {
 	prom.MustRegister(DefaultServerMetrics.serverStartedCounter)
 	prom.MustRegister(DefaultServerMetrics.serverHandledCounter)
-	prom.MustRegister(DefaultServerMetrics.serverStreamMsgReceived)
-	prom.MustRegister(DefaultServerMetrics.serverStreamMsgSent)
+	prom.MustRegister(DefaultServerMetrics.serverStreamMsgReceivedCounter)
+	prom.MustRegister(DefaultServerMetrics.serverStreamMsgSentCounter)
 }
 
 // Register takes a gRPC server and pre-initializes all counters to 0. This

@@ -11,13 +11,14 @@ import (
 // ServerMetrics represents a collection of metrics to be registered on a
 // Prometheus metrics registry for a gRPC server.
 type ServerMetrics struct {
-	serverStartedCounter          *prom.CounterVec
-	serverHandledCounter          *prom.CounterVec
-	serverStreamMsgReceived       *prom.CounterVec
-	serverStreamMsgSent           *prom.CounterVec
-	serverHandledHistogramEnabled bool
-	serverHandledHistogramOpts    prom.HistogramOpts
-	serverHandledHistogram        *prom.HistogramVec
+	extension                      ServerExtension
+	serverStartedCounter           *prom.CounterVec
+	serverHandledCounter           *prom.CounterVec
+	serverStreamMsgReceivedCounter *prom.CounterVec
+	serverStreamMsgSentCounter     *prom.CounterVec
+	serverHandledHistogramEnabled  bool
+	serverHandledHistogramOpts     prom.HistogramOpts
+	serverHandledHistogram         *prom.HistogramVec
 }
 
 // NewServerMetrics returns a ServerMetrics object. Use a new instance of
@@ -25,8 +26,13 @@ type ServerMetrics struct {
 // example when wanting to control which metrics are added to a registry as
 // opposed to automatically adding metrics via init functions.
 func NewServerMetrics(counterOpts ...CounterOption) *ServerMetrics {
+	return NewServerMetricsWithExtension(&DefaultExtension{}, counterOpts...)
+}
+
+func NewServerMetricsWithExtension(extension ServerExtension, counterOpts ...CounterOption) *ServerMetrics {
 	opts := counterOptions(counterOpts)
 	return &ServerMetrics{
+		extension: extension,
 		serverStartedCounter: prom.NewCounterVec(
 			opts.apply(prom.CounterOpts{
 				Name: "grpc_server_started_total",
@@ -36,17 +42,17 @@ func NewServerMetrics(counterOpts ...CounterOption) *ServerMetrics {
 			opts.apply(prom.CounterOpts{
 				Name: "grpc_server_handled_total",
 				Help: "Total number of RPCs completed on the server, regardless of success or failure.",
-			}), []string{"grpc_type", "grpc_service", "grpc_method", "grpc_code"}),
-		serverStreamMsgReceived: prom.NewCounterVec(
+			}), append(extension.ServerHandledCounterCustomLabels(), "grpc_type", "grpc_service", "grpc_method", "grpc_code")),
+		serverStreamMsgReceivedCounter: prom.NewCounterVec(
 			opts.apply(prom.CounterOpts{
 				Name: "grpc_server_msg_received_total",
 				Help: "Total number of RPC stream messages received on the server.",
-			}), []string{"grpc_type", "grpc_service", "grpc_method"}),
-		serverStreamMsgSent: prom.NewCounterVec(
+			}), append(extension.ServerStreamMsgReceivedCounterCustomLabels(), "grpc_type", "grpc_service", "grpc_method")),
+		serverStreamMsgSentCounter: prom.NewCounterVec(
 			opts.apply(prom.CounterOpts{
 				Name: "grpc_server_msg_sent_total",
 				Help: "Total number of gRPC stream messages sent by the server.",
-			}), []string{"grpc_type", "grpc_service", "grpc_method"}),
+			}), append(extension.ServerStreamMsgSentCounterCustomLabels(), "grpc_type", "grpc_service", "grpc_method")),
 		serverHandledHistogramEnabled: false,
 		serverHandledHistogramOpts: prom.HistogramOpts{
 			Name:    "grpc_server_handling_seconds",
@@ -80,8 +86,8 @@ func (m *ServerMetrics) EnableHandlingTimeHistogram(opts ...HistogramOption) {
 func (m *ServerMetrics) Describe(ch chan<- *prom.Desc) {
 	m.serverStartedCounter.Describe(ch)
 	m.serverHandledCounter.Describe(ch)
-	m.serverStreamMsgReceived.Describe(ch)
-	m.serverStreamMsgSent.Describe(ch)
+	m.serverStreamMsgReceivedCounter.Describe(ch)
+	m.serverStreamMsgSentCounter.Describe(ch)
 	if m.serverHandledHistogramEnabled {
 		m.serverHandledHistogram.Describe(ch)
 	}
@@ -93,8 +99,8 @@ func (m *ServerMetrics) Describe(ch chan<- *prom.Desc) {
 func (m *ServerMetrics) Collect(ch chan<- prom.Metric) {
 	m.serverStartedCounter.Collect(ch)
 	m.serverHandledCounter.Collect(ch)
-	m.serverStreamMsgReceived.Collect(ch)
-	m.serverStreamMsgSent.Collect(ch)
+	m.serverStreamMsgReceivedCounter.Collect(ch)
+	m.serverStreamMsgSentCounter.Collect(ch)
 	if m.serverHandledHistogramEnabled {
 		m.serverHandledHistogram.Collect(ch)
 	}
@@ -104,12 +110,12 @@ func (m *ServerMetrics) Collect(ch chan<- prom.Metric) {
 func (m *ServerMetrics) UnaryServerInterceptor() func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		monitor := newServerReporter(m, Unary, info.FullMethod)
-		monitor.ReceivedMessage()
+		monitor.ReceivedMessage(ctx)
 		resp, err := handler(ctx, req)
 		st, _ := grpcstatus.FromError(err)
-		monitor.Handled(st.Code())
+		monitor.Handled(ctx, st.Code())
 		if err == nil {
-			monitor.SentMessage()
+			monitor.SentMessage(ctx)
 		}
 		return resp, err
 	}
@@ -121,7 +127,7 @@ func (m *ServerMetrics) StreamServerInterceptor() func(srv interface{}, ss grpc.
 		monitor := newServerReporter(m, streamRPCType(info), info.FullMethod)
 		err := handler(srv, &monitoredServerStream{ss, monitor})
 		st, _ := grpcstatus.FromError(err)
-		monitor.Handled(st.Code())
+		monitor.Handled(ss.Context(), st.Code())
 		return err
 	}
 }
@@ -156,7 +162,7 @@ type monitoredServerStream struct {
 func (s *monitoredServerStream) SendMsg(m interface{}) error {
 	err := s.ServerStream.SendMsg(m)
 	if err == nil {
-		s.monitor.SentMessage()
+		s.monitor.SentMessage(s.ServerStream.Context())
 	}
 	return err
 }
@@ -164,7 +170,7 @@ func (s *monitoredServerStream) SendMsg(m interface{}) error {
 func (s *monitoredServerStream) RecvMsg(m interface{}) error {
 	err := s.ServerStream.RecvMsg(m)
 	if err == nil {
-		s.monitor.ReceivedMessage()
+		s.monitor.ReceivedMessage(s.ServerStream.Context())
 	}
 	return err
 }
@@ -175,8 +181,8 @@ func preRegisterMethod(metrics *ServerMetrics, serviceName string, mInfo *grpc.M
 	methodType := string(typeFromMethodInfo(mInfo))
 	// These are just references (no increments), as just referencing will create the labels but not set values.
 	metrics.serverStartedCounter.GetMetricWithLabelValues(methodType, serviceName, methodName)
-	metrics.serverStreamMsgReceived.GetMetricWithLabelValues(methodType, serviceName, methodName)
-	metrics.serverStreamMsgSent.GetMetricWithLabelValues(methodType, serviceName, methodName)
+	metrics.serverStreamMsgReceivedCounter.GetMetricWithLabelValues(methodType, serviceName, methodName)
+	metrics.serverStreamMsgSentCounter.GetMetricWithLabelValues(methodType, serviceName, methodName)
 	if metrics.serverHandledHistogramEnabled {
 		metrics.serverHandledHistogram.GetMetricWithLabelValues(methodType, serviceName, methodName)
 	}
